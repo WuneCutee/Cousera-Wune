@@ -43,24 +43,78 @@ Do tool này không có trên Chrome Web Store, bạn cần cài đặt thủ c�
 
 ## ⚙️ Hướng Dẫn Sử Dụng
 
-### 1. Cấu hình API Key (Quan trọng cho Quiz)
-Để tính năng giải Quiz hoạt động, tool sử dụng **Groq API** (Mô hình Llama-3). Tool có sẵn key dự phòng, nhưng để ổn định nhất, bạn nên dùng key riêng (Miễn phí).
+# Hướng Dẫn Sử Dụng Wune Extension
 
-1.  Truy cập: [https://console.groq.com/keys](https://console.groq.com/keys)
-2.  Đăng nhập và tạo một **API Key** mới.
-3.  Copy Key đó (bắt đầu bằng `gsk_...`).
-
-### 2. Chạy Tool
-1.  Đăng nhập vào Coursera và mở khóa học bạn muốn học.
-2.  Click vào icon **Extension** trên thanh công cụ -> Chọn **Open Side Panel** (hoặc click icon Wune nếu bạn đã pin).
-3.  Giao diện Wune sẽ hiện ra bên phải màn hình.
-4.  Dán **API Key** của bạn vào ô "Enter your API keys".
-5.  Chọn các nhiệm vụ muốn làm (Video, Quiz, Reading...).
-6.  Nhấn nút **⚡ START AUTOMATION**.
+✅ **Cài đặt thành công!** Icon của Wune sẽ xuất hiện trên thanh công cụ.
 
 ---
 
-## 📸 Hình Ảnh Demo
+## ⚙ Hướng Dẫn Chi Tiết
+
+### 1. Bật chế độ nhà phát triển của Chrome
+- Mở Chrome và truy cập: `chrome://extensions/`
+- Gạt công tắc **Developer mode** ở góc phải trên cùng.
+- Kiểm tra extension Wune đã xuất hiện trong danh sách.
+
+> ![Ảnh minh họa bước 1](![Uploading image.png…]()
+)
+
+---
+
+### 2. Mở Wune ở Side Panel
+- Click icon **Extension** (hình mảnh ghép) trên thanh công cụ.
+- Chọn **Open Side Panel** để mở bảng bên phải.
+- Nếu đã pin Wune, có thể click trực tiếp icon Wune.
+
+> ![Ảnh minh họa bước 2](path/to/image2.png)
+
+---
+
+### 3. Giao diện Wune hiển thị bên phải
+- Bảng bên phải xuất hiện với giao diện Wune.
+- Kiểm tra các tab như Video, Quiz, Reading… và ô nhập API Key.
+
+> ![Ảnh minh họa bước 3](path/to/image3.png)
+
+---
+
+### 4. Dán API Key vào ô "Enter your API keys"
+- Sao chép API Key của bạn từ nguồn cung cấp.
+- Dán vào ô nhập **Enter your API keys**.
+- Nhấn **Save/Apply** nếu giao diện yêu cầu.
+
+> ![Ảnh minh họa bước 4](path/to/image4.png)
+
+---
+
+### 5. Chọn các nhiệm vụ muốn làm
+- **Video:** Tự động xem/điền theo yêu cầu.
+- **Quiz:** Hỗ trợ làm bài trắc nghiệm.
+- **Reading:** Tự động đọc/đánh dấu hoàn thành.
+- Có thể thiết lập thêm tùy chọn nâng cao nếu có.
+
+> ![Ảnh minh họa bước 5](path/to/image5.png)
+
+---
+
+### 6. Bắt đầu tự động hóa
+- Nhấn nút **⚡ START AUTOMATION**.
+- Theo dõi trạng thái chạy trong panel.
+- Dừng hoặc tạm dừng bằng nút **Stop/Pause** nếu cần.
+
+> ![Ảnh minh họa bước 6](path/to/image6.png)
+
+---
+
+## 💡 Mẹo & Xử Lý Sự Cố
+- **Không mở được Side Panel:** Kiểm tra Chrome đã cập nhật, bật/tắt lại Developer mode.
+- **API Key không nhận:** Kiểm tra không có khoảng trắng thừa, đảm bảo key còn hiệu lực.
+- **Nhiệm vụ không chạy:** Đ
+
+---
+
+
+
 
 
 
