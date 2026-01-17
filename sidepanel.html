@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Coursera Wune Pro v4.5</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body class="dark-theme">
+    <div class="app-container">
+        <header>
+            <div class="brand">
+                <div class="logo-glow">🦄</div>
+                <div class="titles">
+                    <h1>Coursera Wune</h1>
+                    <span class="version">PRO v4.5</span>
+                </div>
+            </div>
+            <div id="status-badge" class="status-badge">Sẵn sàng!</div>
+        </header>
+
+        <main class="scroll-content">
+            <!-- 1. ĐIỀU KHIỂN -->
+            <div class="card action-card">
+                <div class="info-row">
+                    <span class="info-label" id="course-name-display">Đang nhận diện...</span>
+                    <input type="text" id="course-slug" placeholder="course-slug-id" class="mini-input">
+                </div>
+                <div class="toggles-grid">
+                    <button class="all-btn" id="btn-all">🌟 Bật tất cả mục tiêu</button>
+                    <label class="cute-toggle"><input type="checkbox" id="skip-video" checked><span>🎬 Video</span></label>
+                    <label class="cute-toggle"><input type="checkbox" id="solve-quiz" checked><span>🧠 Quiz AI</span></label>
+                    <label class="cute-toggle"><input type="checkbox" id="read-supplement" checked><span>📖 Reading</span></label>
+                    <label class="cute-toggle"><input type="checkbox" id="solve-widget" checked><span>🧩 Widget</span></label>
+                </div>
+                <button id="start-btn" class="glow-button">🚀 START AUTOMATION</button>
+            </div>
+
+            <!-- 2. TIẾN ĐỘ (ĐÃ NÂNG CẤP HIỆU ỨNG ĐỘNG) -->
+            <div id="progress-container" class="card progress-card hidden">
+                <div class="progress-info">
+                    <span class="progress-label">🚀 TIẾN TRÌNH TỰ ĐỘNG</span>
+                    <span id="percent-text" class="percent-badge">0%</span>
+                </div>
+                <div class="progress-track">
+                    <div id="progress-fill" class="progress-fill-animated">
+                        <div class="shimmer-effect"></div>
+                    </div>
+                </div>
+                <div class="progress-status-mini">Hệ thống đang xử lý bài học, vui lòng chờ...</div>
+            </div>
+
+            <!-- 3. NHẬT KÝ CHẠY -->
+            <div class="card log-card">
+                <div class="card-header">📜 NHẬT KÝ CHẠY</div>
+                <div id="status-display" class="terminal-window">
+                    <div class="log-line system">Hệ thống đã sẵn sàng! ❤️</div>
+                </div>
+            </div>
+
+            <!-- 4. CẤU HÌNH API KEYS -->
+            <!-- 4. CẤU HÌNH API KEYS (SỬA LỖI HIỂN THỊ) -->
+            <div class="card config-card">
+                <div class="card-header">⚙️ CẤU HÌNH API KEYS (GEMINI)</div>
+                <div class="keys-container">
+                    <div class="input-group-row">
+                        <label>Key 1</label>
+                        <input type="text" id="gemini-1" placeholder="Nhập Gemini API Key 1...">
+                    </div>
+                    <div class="input-group-row">
+                        <label>Key 2</label>
+                        <input type="text" id="gemini-2" placeholder="Nhập Gemini API Key 2...">
+                    </div>
+                    <div class="input-group-row">
+                        <label>Key 3</label>
+                        <input type="text" id="gemini-3" placeholder="Nhập Gemini API Key 3...">
+                    </div>
+                    <div class="input-group-row">
+                        <label>Key 4</label>
+                        <input type="text" id="gemini-4" placeholder="Nhập Gemini API Key 4...">
+                    </div>
+                </div>
+                <div class="auto-hint">✨ Tự động xoay vòng Key khi hết hạn mức</div>
+            </div>
+
+            <!-- 5. DONATE -->
+            <div class="card donate-card">
+                <div class="donate-header">💖 ỦNG HỘ TÁC GIẢ</div>
+                <div class="donate-body">
+                    <img src="icons/qr_payment.png" class="qr-mega" alt="QR Donate">
+                    <div class="bank-card">
+                        <div class="bank-name">MB BANK</div>
+                        <div class="bank-user">NGUYỄN DUY QUÂN</div>
+                    </div>
+                </div>
+            </div>
+            <div class="bottom-spacer"></div>
+        </main>
+    </div>
+    <script src="keys.js"></script>
+    <script src="sidepanel.js"></script>
+</body>
+</html>

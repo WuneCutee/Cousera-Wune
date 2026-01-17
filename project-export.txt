@@ -1,0 +1,1259 @@
+PROJECT EXPORT
+
+STRUCTURE
+
+📁 icons
+📄 background.js
+📄 content.js
+📄 keys.js
+📄 manifest.json
+📄 README.md
+📄 sidepanel.html
+📄 sidepanel.js
+📄 styles.css
+
+FILES
+
+=== background.js ===
+
+/**
+ * COURSERA AUTOMATION - BACKGROUND SCRIPT
+ * Version: 2.5 (Fix Submit Failed & Quota)
+ */
+
+const BASE_URL = "https://www.coursera.org/api/";
+const GRAPHQL_URL = "https://www.coursera.org/graphql-gateway";
+
+// Trạng thái toàn cục
+let state = {
+    config: {},
+    userId: null,
+    courseId: null,
+    isRunning: false
+};
+let currentKeyIndex = 0; 
+// Cấu hình SidePanel
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
+    .catch((error) => console.error(error));
+
+/**
+ * 1. CẤU HÌNH MẠNG (DNR Rules)
+ */
+async function setupNetRules() {
+    const rules = [{
+        "id": 1,
+        "priority": 1,
+        "action": {
+            "type": "modifyHeaders",
+            "requestHeaders": [
+                { "header": "x-requested-with", "operation": "set", "value": "XMLHttpRequest" },
+                { "header": "x-coursera-version", "operation": "set", "value": "3bfd497de04ae0fef167b747fd85a6fbc8fb55df" }
+            ]
+        },
+        "condition": {
+            "urlFilter": "*://www.coursera.org/*",
+            "resourceTypes": ["xmlhttprequest"]
+        }
+    }];
+    
+    await chrome.declarativeNetRequest.updateDynamicRules({
+        removeRuleIds: [1],
+        addRules: rules
+    });
+    console.log("✅ DNR Rules updated.");
+}
+setupNetRules();
+// --- HÀM TIỆN ÍCH ---
+
+async function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function logToPanel(text) {
+    chrome.runtime.sendMessage({ type: 'statusUpdate', text: text }, () => {
+        // Lờ lỗi nếu Sidepanel đóng
+        if (chrome.runtime.lastError) {
+            console.warn("Sidepanel closed, message ignored.");
+        }
+    });
+}
+
+// --- CẤU HÌNH MAPPING CÂU HỎI ---
+const QUESTION_MAP = {
+    'Submission_MultipleChoiceQuestion': ['multipleChoiceResponse', 'MULTIPLE_CHOICE'],
+    'Submission_CheckboxQuestion': ['checkboxResponse', 'CHECKBOX'],
+    'Submission_PlainTextQuestion': ['plainTextResponse', 'PLAIN_TEXT'],
+    'Submission_RichTextQuestion': ['richTextResponse', 'RICH_TEXT'],
+    'Submission_RichTextQuestionSchema': ['richTextResponse', 'RICH_TEXT'],
+    'Submission_MultipleChoiceReflectQuestion': ['multipleChoiceResponse', 'MULTIPLE_CHOICE'],
+    'Submission_CheckboxReflectQuestion': ['checkboxResponse', 'CHECKBOX'],
+    'Submission_MathQuestion': ['mathResponse', 'MATH'],
+    'Submission_NumericQuestion': ['numericResponse', 'NUMERIC'],
+    'Submission_RegexQuestion': ['regexResponse', 'REGEX'],
+    'Submission_TextExactMatchQuestion': ['textExactMatchResponse', 'TEXT_EXACT_MATCH'],
+    'Submission_TextReflectQuestion': ['textReflectResponse', 'TEXT_REFLECT'],
+    'Submission_MultipleFillableBlanksQuestion': ['multipleFillableBlanksResponse', 'MULTIPLE_FILLABLE_BLANKS']
+};
+
+const F = {
+    'CML': 'fragment Cml on CmlContent { cmlValue dtdId }',
+    'RT': 'fragment RT on Submission_RichText { ... on CmlContent { ...Cml } }',
+    'INSTR': 'fragment Instr on Submission_Instructions { overview { ...RT } reviewCriteria { ... RT } }',
+    'OPT': 'fragment Opt on Submission_MultipleChoiceOption { id display { ...RT } }',
+    'Q_RT': 'fragment Q_RT on Submission_RichTextQuestion { id partId: id questionSchema { prompt { ...RT } } }',
+    'Q_PT': 'fragment Q_PT on Submission_PlainTextQuestion { id partId: id questionSchema { prompt { ...RT } } }',
+    'Q_MC': 'fragment Q_MC on Submission_MultipleChoiceQuestion { id partId: id questionSchema { prompt { ...RT } options { ...Opt } } }',
+    'Q_CB': 'fragment Q_CB on Submission_CheckboxQuestion { id partId: id questionSchema { prompt { ...RT } options { ...Opt } } }',
+    'Q_MCR': 'fragment Q_MCR on Submission_MultipleChoiceReflectQuestion { id partId: id questionSchema { prompt { ...RT } options { ...Opt } } }',
+    'Q_CBR': 'fragment Q_CBR on Submission_CheckboxReflectQuestion { id partId: id questionSchema { prompt { ...RT } options { ...Opt } } }',
+    'Q_TR': 'fragment Q_TR on Submission_TextReflectQuestion { id partId: id questionSchema { prompt { ...RT } } }',
+    'Q_MFB': 'fragment Q_MFB on Submission_MultipleFillableBlanksQuestion { id partId: id questionSchema { prompt { ...RT } fillableBlanks { ... on Submission_MultipleChoiceFillableBlank { id } } } }',
+    'Q_TB': 'fragment Q_TB on Submission_TextBlock { id partId: id body { ...RT } }',
+    'Q_FU': 'fragment Q_FU on Submission_FileUploadQuestion { id partId: id questionSchema { prompt { ...RT } } }'
+};
+const ALL_FRAGMENTS = Object.values(F).join(' ');
+
+// --- HÀM TIỆN ÍCH ---
+
+async function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// --- FETCH COURSERA REST API ---
+async function fetchCoursera(endpoint, options = {}) {
+    try {
+        const url = BASE_URL + endpoint;
+        const headers = {
+            'x-csrf3-token': state.config.csrfToken || '',
+            'Cookie': `CAUTH=${state.config.cauthToken || ''}; CSRF3-Token=${state.config.csrfToken || ''}`,
+            'Referer': 'https://www.coursera.org',
+            'Origin': 'https://www.coursera.org',
+            'x-coursera-version': '3bfd497de04ae0fef167b747fd85a6fbc8fb55df'
+        };
+
+        if (options.body) headers['Content-Type'] = 'application/json';
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+        const response = await fetch(url, { ...options, headers, signal: controller.signal });
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            logToPanel(`      ⚠️ API Fail (${endpoint}) ${response.status}`);
+            return { error: `HTTP ${response.status}` };
+        }
+        
+        const text = await response.text();
+        return text ? JSON.parse(text) : {};
+    } catch (err) {
+        if (err.name === 'AbortError') return { error: 'Timeout' };
+        return { error: err.message };
+    }
+}
+
+// --- FETCH COURSERA GRAPHQL ---
+async function fetchCourseraGraphQL(opName, query, variables = {}) {
+    let url = GRAPHQL_URL;
+    try {
+        const headers = {
+            'x-csrf3-token': state.config.csrfToken || '',
+            'Cookie': `CAUTH=${state.config.cauthToken || ''}; CSRF3-Token=${state.config.csrfToken || ''}`,
+            'Referer': 'https://www.coursera.org/',
+            'Origin': 'https://www.coursera.org',
+            'Content-Type': 'application/json',
+            'x-coursera-version': '3bfd497de04ae0fef167b747fd85a6fbc8fb55df',
+            'x-requested-with': 'XMLHttpRequest'
+        };
+
+        const cleanQuery = query.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+        if (url.includes('graphql-gateway')) url += `?opname=${opName}`;
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 25000);
+
+        let response = await fetch(url, {
+            method: 'POST', headers: headers,
+            body: JSON.stringify({ operationName: opName, query: cleanQuery, variables: variables }),
+            signal: controller.signal
+        });
+
+        if (response.status === 404 || response.status === 500) {
+            url = BASE_URL + 'opencourse.v1/graphql';
+            if (opName) url += `?opname=${opName}`;
+            response = await fetch(url, {
+                method: 'POST', headers: headers,
+                body: JSON.stringify({ operationName: opName, query: cleanQuery, variables: variables }),
+                signal: controller.signal
+            });
+        }
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            const errText = await response.text();
+            return { error: `HTTP ${response.status}`, body: errText };
+        }
+
+        const json = await response.json();
+        if (json.errors) return { error: json.errors[0]?.message, errors: json.errors };
+        return json;
+
+    } catch (err) {
+        return { error: err.message };
+    }
+}
+
+// --- LOGIC CHÍNH ---
+
+async function getUserId() {
+    try {
+        const data = await fetchCoursera('adminUserPermissions.v1?q=my');
+        if (data && data.elements && data.elements[0]) {
+            state.userId = data.elements[0].id;
+            logToPanel(`✅ User ID: ${state.userId}`);
+            return true;
+        }
+        return false;
+    } catch (e) { return false; }
+}
+async function getCourseMaterials() {
+    let slug = state.config.slug || '';
+    if (slug.includes('/')) slug = slug.split('/').filter(Boolean).pop(); 
+    logToPanel(`🔍 Khởi tạo dữ liệu cho: ${slug}`);
+
+    const params = new URLSearchParams({
+        'q': 'slug', 'slug': slug,
+        'includes': 'modules,lessons,passableLessonElements,items',
+        'fields': 'moduleIds,onDemandCourseMaterialModules.v1(name,lessonIds),onDemandCourseMaterialLessons.v1(name,elementIds),onDemandCourseMaterialItems.v2(name,contentSummary,timeCommitment,isLocked)',
+        'showLockedItems': 'true'
+    });
+
+    const data = await fetchCoursera(`onDemandCourseMaterials.v2/?${params.toString()}`);
+    if (data.error || !data.elements || data.elements.length === 0) throw new Error("Course info fetch failed.");
+
+    state.courseId = data.elements[0].id;
+    const linked = data.linked || {};
+    const itemsMap = {};
+    (linked['onDemandCourseMaterialItems.v2'] || []).forEach(item => itemsMap[item.id] = item);
+    const lessonsMap = Object.fromEntries((linked['onDemandCourseMaterialLessons.v1'] || []).map(l => [l.id, l]));
+    const modules = linked['onDemandCourseMaterialModules.v1'] || [];
+    const courseModules = data.elements[0].moduleIds || [];
+
+    // Tính tổng số bài để chia % chính xác
+    let totalItems = 0;
+    courseModules.forEach(modId => {
+        const mod = modules.find(m => m.id === modId);
+        if (mod) mod.lessonIds.forEach(lid => { if (lessonsMap[lid]) totalItems += (lessonsMap[lid].elementIds || []).length; });
+    });
+
+    let processedCount = 0;
+    for (const modId of courseModules) {
+        const module = modules.find(m => m.id === modId);
+        if (!module) continue;
+        logToPanel(`--- [Học phần] ${module.name} ---`);
+        for (const lessonId of module.lessonIds || []) {
+            const lesson = lessonsMap[lessonId];
+            if (!lesson) continue;
+            for (const elemId of lesson.elementIds || []) {
+                processedCount++;
+                const itemId = elemId.split('~').pop();
+                const item = itemsMap[itemId] || itemsMap[elemId];
+                if (item) {
+                    // GỬI PHẦN TRĂM TIẾN ĐỘ VỀ UI (Đúng vị trí)
+                    let percent = (processedCount / totalItems) * 100;
+                    chrome.runtime.sendMessage({ type: 'updateProgress', percent: percent }, () => {
+                        if (chrome.runtime.lastError) {}
+                    });
+                    
+                    logToPanel(`    [${processedCount}/${totalItems}] ${item.name}`);
+                    await processItem(item, slug);
+                }
+            }
+        }
+    }
+}
+async function processItem(item, courseSlug) {
+    const type = item.contentSummary?.typeName || 'unknown';
+    const id = item.id;
+    const name = item.name;
+    if (item.isLocked) return;
+
+    const isLti = type === 'ungradedLti'; 
+    const isWidget = type === 'ungradedWidget';
+    const isReading = ['supplement', 'reading', 'ungradedPlugin'].includes(type);
+    const isQuiz = ['gradedQuiz', 'quiz', 'exam', 'ungradedAssignment'].includes(type) || name.toLowerCase().includes('quiz');
+
+    try {
+        if (type === 'lecture' || type === 'video') {
+            if (state.config.skipVideo) { 
+                logToPanel("      📺 Watching video..."); 
+                await watchVideoFull(item, courseSlug); 
+                await sleep(300); 
+            }
+        } 
+        else if (isLti) {
+            if (state.config.solveWidget) { 
+                logToPanel(`      🧪 Launching Lab (${type})...`); 
+                await markLtiCompleted(id);
+                await sleep(500); 
+            }
+        }
+        else if (isWidget) {
+            if (state.config.solveWidget) { 
+                logToPanel(`      🧩 Completing Widget (${type})...`); 
+                await markWidgetCompleted(id); 
+                await sleep(500); 
+            }
+        }
+        else if (isReading) {
+            if (state.config.readSupplement) { 
+                logToPanel(`      📖 Reading supplement (${type})...`); 
+                await readSupplementFull(id); 
+                await sleep(300); 
+            }
+        } 
+        else if (isQuiz) {
+            if (state.config.solveQuiz) { 
+                logToPanel(`      🧠 Solving quiz... (${type})`); 
+                await solveQuiz(id, name, type); 
+                await sleep(1500); 
+            }
+        }
+    } catch (e) { logToPanel(`      ❌ Item error: ${e.message}`); }
+}
+// --- VIDEO & READING ---
+async function watchVideoFull(item, slug) {
+    const itemId = item.id;
+    const meta = await fetchCoursera(`onDemandLectureVideos.v1/${state.courseId}~${itemId}?includes=video&fields=disableSkippingForward,startMs,endMs`);
+    const videoId = meta.linked?.['onDemandVideos.v1']?.[0]?.id;
+    
+    if (videoId) {
+        await fetchBase('POST', `opencourse.v1/user/${state.userId}/course/${slug}/item/${itemId}/lecture/videoEvents/play?autoEnroll=false`, { contentRequestBody: {} });
+        const duration = item.timeCommitment || 60000;
+        await fetchBase('POST', `onDemandVideoProgresses.v1/${state.userId}~${state.courseId}~${videoId}`, {
+            videoProgressId: `${state.userId}~${state.courseId}~${videoId}`,
+            viewedUpTo: duration + 5000 
+        });
+        await sleep(200);
+        await fetchBase('POST', `opencourse.v1/user/${state.userId}/course/${slug}/item/${itemId}/lecture/videoEvents/ended?autoEnroll=false`, { contentRequestBody: {} });
+    }
+    await markCompleted(itemId);
+}
+
+async function readSupplementFull(itemId) {
+    await fetchBase('POST', 'onDemandSupplementCompletions.v1', {
+        courseId: state.courseId,
+        itemId: itemId,
+        userId: parseInt(state.userId)
+    });
+    await markCompleted(itemId);
+}
+
+async function markCompleted(itemId) {
+    await fetchBase('POST', 'onDemandCourseItemProgress.v1', {
+        courseId: state.courseId, itemId: itemId, progressState: "COMPLETED"
+    });
+}
+
+// --- QUIZ SOLVER ---
+async function solveQuiz(itemId, itemName, itemType) {
+    try {
+        const queryState = ALL_FRAGMENTS + `
+        query QueryState($courseId: ID!, $itemId: ID!) { 
+            SubmissionState { 
+                queryState(courseId: $courseId, itemId: $itemId) { 
+                    ... on Submission_SubmissionState { 
+                        allowedAction 
+                        integritySettings { attemptId } 
+                        attempts { 
+                            inProgressAttempt { 
+                                id 
+                                draft { 
+                                    id instructions { ...Instr } 
+                                    parts { __typename ...Q_MC ...Q_CB ...Q_PT ...Q_RT ...Q_MCR ...Q_CBR ...Q_TR ...Q_MFB ...Q_TB ...Q_FU } 
+                                } 
+                            } 
+                        } 
+                    } 
+                    ... on Submission_QueryStateFailure { errors { errorCode } } 
+                } 
+            } 
+        }`;
+
+        let response = await fetchCourseraGraphQL('QueryState', queryState, { courseId: state.courseId, itemId: itemId });
+        if (response.error) return;
+
+        let subState = response?.data?.SubmissionState?.queryState;
+        const allowedAction = subState?.allowedAction;
+
+        // Nếu cần bắt đầu lượt mới
+        if (allowedAction === 'START_NEW_ATTEMPT' || allowedAction === 'REWORK_SUBMISSION') {
+            logToPanel('      🚀 Starting new attempt...');
+            const startMutation = `mutation Submission_StartAttempt($courseId: ID!, $itemId: ID!) { Submission_StartAttempt(input: {courseId: $courseId, itemId: $itemId}) { ... on Submission_StartAttemptSuccess { __typename } ... on Submission_StartAttemptFailure { errors { errorCode } } } }`;
+            await fetchCourseraGraphQL('Submission_StartAttempt', startMutation, { courseId: state.courseId, itemId: itemId });
+            
+            // --- FIX: Đợi server khởi tạo draft mới ---
+            await sleep(1500); 
+            
+            // Lấy lại trạng thái mới nhất để lấy Attempt ID vừa tạo
+            response = await fetchCourseraGraphQL('QueryState', queryState, { courseId: state.courseId, itemId: itemId });
+            subState = response?.data?.SubmissionState?.queryState;
+        }
+
+        const attempt = subState?.attempts?.inProgressAttempt;
+        if (!attempt) {
+            logToPanel('      ℹ️ No active attempt found.');
+            return;
+        }
+
+        const draft = attempt.draft;
+        const parts = draft.parts || [];
+        
+        let prompt = 'You are a student solving a Coursera assignment.\n[QUESTIONS]\nRespond ONLY with a JSON ARRAY: [{"partId": "...", "choiceId": "...", "text": "..."}].\n';
+        const questionMap = new Map();
+
+        parts.forEach((p, index) => {
+            if (p.partId) questionMap.set(p.partId, p);
+            if (p.questionSchema) {
+                const qText = p.questionSchema.prompt?.cmlValue || 'Question';
+                prompt += `\n${index+1}. [ID: ${p.partId}] ${qText}\n`;
+                if (p.questionSchema.options) {
+                    p.questionSchema.options.forEach(opt => {
+                        const optText = opt.display?.cmlValue || 'Option';
+                        prompt += `   - Option [${opt.id}]: ${optText}\n`;
+                    });
+                }
+            }
+        });
+
+        logToPanel(`      🤖 Asking Gemini (${questionMap.size} questions)...`);
+        const aiRaw = await callGemini(prompt);
+        
+        const jsonMatch = aiRaw.match(/\[[\s\S]*\]/);
+        if (!jsonMatch) throw new Error("AI response format error.");
+        
+        const answers = JSON.parse(jsonMatch[0]);
+        const responseMap = [];
+
+        answers.forEach(ans => {
+            const q = questionMap.get(ans.partId || ans.id);
+            if (!q) return;
+
+            const [resKey, typeName] = QUESTION_MAP[q.__typename] || ['plainTextResponse', 'PLAIN_TEXT'];
+            let responseData;
+
+            if (typeName === 'MULTIPLE_CHOICE') {
+                responseData = { chosen: String(ans.choiceId || ans.answer) };
+            } else if (typeName === 'CHECKBOX') {
+                const choices = Array.isArray(ans.choiceId) ? ans.choiceId : [ans.choiceId];
+                responseData = { chosen: choices.map(String) };
+            } else {
+                responseData = { chosen: String(ans.text || ans.answer) };
+            }
+
+            responseMap.push({
+                questionId: q.partId,
+                questionType: typeName,
+                questionResponse: { [resKey]: responseData }
+            });
+        });
+
+        // --- CƠ CHẾ LƯU & NỘP ---
+        const validIds = [subState.integritySettings?.attemptId, attempt.id, draft.id].filter(Boolean);
+        let saveSuccess = false;
+
+        for (const idToTry of validIds) {
+            const saveMutation = `mutation Submission_SaveResponses($input: Submission_SaveResponsesInput!) { Submission_SaveResponses(input: $input) { ... on Submission_SaveResponsesSuccess { __typename } ... on Submission_SaveResponsesFailure { errors { errorCode } } } }`;
+            const saveRes = await fetchCourseraGraphQL('Submission_SaveResponses', saveMutation, {
+                input: { courseId: state.courseId, itemId: itemId, attemptId: idToTry, questionResponses: responseMap }
+            });
+
+            if (saveRes.data?.Submission_SaveResponses?.__typename === 'Submission_SaveResponsesSuccess') {
+                saveSuccess = true;
+                break;
+            } else {
+                console.error("Save failed for ID:", idToTry, saveRes);
+            }
+        }
+
+        if (!saveSuccess) {
+            logToPanel('      ❌ Save Responses Failed (Server Busy).');
+            return;
+        }
+
+        // --- FIX: Tăng thời gian đợi để server đồng bộ trước khi Submit ---
+        await sleep(1000); 
+
+        logToPanel('      📤 Submitting...');
+        const submitMutation = `mutation Submission_SubmitLatestDraft($input: Submission_SubmitLatestDraftInput!) { Submission_SubmitLatestDraft(input: $input) { ... on Submission_SubmitLatestDraftSuccess { __typename } ... on Submission_SubmitLatestDraftFailure { errors { errorCode message } } } }`;
+        
+        let submitSuccess = false;
+        for (const idToTry of validIds) {
+            const submitRes = await fetchCourseraGraphQL('Submission_SubmitLatestDraft', submitMutation, {
+                input: { courseId: state.courseId, itemId: itemId, submissionId: idToTry }
+            });
+
+            if (submitRes.data?.Submission_SubmitLatestDraft?.__typename === 'Submission_SubmitLatestDraftSuccess') {
+                logToPanel(`      ✅ "${itemName}" DONE.`);
+                submitSuccess = true;
+                break;
+            } else if (submitRes.data?.Submission_SubmitLatestDraft?.errors) {
+                const err = submitRes.data.Submission_SubmitLatestDraft.errors[0];
+                logToPanel(`      ⚠️ Submit Error: ${err.errorCode}`);
+            }
+        }
+
+        if (!submitSuccess) logToPanel('      ⚠️ Submit Failed (All IDs tried).');
+
+    } catch (err) {
+        logToPanel(`      ❌ Quiz error: ${err.message}`);
+    }
+}
+
+async function callGemini(prompt) {
+    const rawKeys = state.config.geminiKey || "";
+    const keys = rawKeys.split(',').map(k => k.trim()).filter(k => k !== "");
+
+    if (keys.length === 0) throw new Error("THIẾU API KEY! Hãy nhập vào phần cấu hình.");
+
+    // Thử tối đa qua tất cả các Key bạn có
+    for (let i = 0; i < keys.length; i++) {
+        const idx = currentKeyIndex % keys.length; // Lấy vị trí Key hiện tại
+        const activeKey = keys[idx];
+        
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key=${activeKey}`;
+
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+            });
+
+            const data = await response.json();
+
+            // Kiểm tra lỗi hết hạn mức (429)
+            if (data.error && (response.status === 429 || data.error.message.toLowerCase().includes("quota"))) {
+                logToPanel(`      🔄 Key số ${idx + 1} hết hạn mức. Đang đổi sang Key tiếp theo...`);
+                currentKeyIndex++; // Tăng index để dùng Key tiếp theo
+                continue; // Thử lại vòng lặp với Key mới
+            }
+
+            if (data.error) throw new Error(`Gemini Error: ${data.error.message}`);
+            
+            if (data.candidates && data.candidates[0]?.content?.parts[0]?.text) {
+                return data.candidates[0].content.parts[0].text;
+            }
+        } catch (e) {
+            // Nếu đây là Key cuối cùng mà vẫn lỗi thì mới ném lỗi ra ngoài
+            if (i === keys.length - 1) throw e;
+        }
+    }
+    throw new Error("TẤT CẢ API KEYS ĐỀU HẾT HẠN MỨC. Vui lòng thêm Key hoặc đợi 1 phút.");
+}
+
+// --- FETCH HELPER ---
+async function fetchBase(method, endpoint, body) {
+    const url = BASE_URL + endpoint;
+    const headers = {
+        'X-Csrf3-Token': state.config.csrfToken || '',
+        'Cookie': `CAUTH=${state.config.cauthToken || ''}; CSRF3-Token=${state.config.csrfToken || ''}`,
+        'Referer': 'https://www.coursera.org/',
+        'Origin': 'https://www.coursera.org',
+        'Content-Type': 'application/json'
+    };
+    return fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
+}
+
+async function startAutomation() {
+    if (state.isRunning) return;
+    state.isRunning = true;
+    logToPanel("🚀 Bắt đầu quá trình tự động hóa...");
+    try {
+        const stored = await chrome.storage.local.get(['geminiKey', 'cauthToken', 'csrfToken']);
+        state.config = { ...state.config, ...stored };
+
+        if (await getUserId()) {
+            await getCourseMaterials();
+            logToPanel("✅ HOÀN THÀNH!");
+        } else {
+            throw new Error("Thất bại xác thực. Hãy làm mới Cookie!");
+        }
+    } catch (e) {
+        logToPanel(`❌ Lỗi hệ thống: ${e.message}`);
+    } finally {
+        state.isRunning = false;
+        // Báo hiệu kết thúc cho giao diện xử lý
+        chrome.runtime.sendMessage({ type: 'automationFinished' }, () => {
+            if (chrome.runtime.lastError) {}
+        });
+    }
+}
+async function markWidgetCompleted(itemId) {
+    try {
+        const sessionId = generateSessionId();
+        const widgetId = `${state.userId}~${state.courseId}~${itemId}`;
+        
+        // Chỉ gửi PUT Widget Progress
+        const response = await fetchBase('PUT', `onDemandWidgetProgress.v1/${widgetId}`, {
+            sessionId: sessionId,
+            progressState: "Completed"
+        });
+        
+        // Luôn gửi markCompleted chung để đồng bộ tiến độ hiển thị trên web
+        await markCompleted(itemId);
+
+        if (response.ok) {
+            logToPanel(`      ✅ Widget completed`);
+        } else {
+            // Không báo lỗi to nếu web vẫn ghi nhận thành công
+            console.warn(`Widget PUT status: ${response.status}`);
+        }
+    } catch (e) {
+        await markCompleted(itemId); // Fallback
+    }
+}
+
+/**
+ * XỬ LÝ BÀI LAB (LTI) - Dựa trên Log XHR POST 201
+ */
+async function markLtiCompleted(itemId) {
+    const endpoint = `onDemandLtiUngradedLaunches.v1/?fields=endpointUrl%2CauthRequestUrl%2CsignedProperties`;
+    
+    // Gửi lệnh Launch kèm flag hoàn thành
+    const response = await fetchCoursera(endpoint, {
+        method: 'POST',
+        body: JSON.stringify({
+            courseId: state.courseId,
+            itemId: itemId,
+            learnerId: parseInt(state.userId),
+            markItemCompleted: true // ✅ Đây là chìa khóa để hoàn thành bài Lab
+        })
+    });
+
+    if (!response.error) {
+        logToPanel(`      ✅ Lab/LTI Completed.`);
+    } else {
+        logToPanel(`      ⚠️ LTI Launch failed, trying fallback...`);
+    }
+
+    // Luôn gửi thêm markCompleted tổng quát để web cập nhật tích xanh
+    await markCompleted(itemId);
+}
+// Hàm tạo sessionId ngẫu nhiên
+function generateSessionId() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    let result = '';
+    for (let i = 0; i < 22; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+}
+chrome.runtime.onMessage.addListener((request) => {
+    if (request.action === 'startAutomation') {
+        state.config = { ...state.config, ...request.config };
+        startAutomation();
+    }
+});
+
+========================================
+
+=== content.js ===
+
+
+// Thông báo khi script được nạp vào trang web
+console.log("Skipera Extension: Content script loaded.");
+
+/**
+ * Lắng nghe tin nhắn từ Background Script hoặc SidePanel
+ */
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    
+    // Nếu yêu cầu là lấy thông tin trang web hiện tại
+    if (request.type === 'get_page_info') {
+        
+        // Trả về URL và Tiêu đề của trang Coursera đang mở
+        sendResponse({
+            'url': window.location.href,
+            'title': document.title
+        });
+    }
+
+    // Trả về true để giữ cổng kết nối mở cho phản hồi bất đồng bộ (nếu cần)
+    return true; 
+});
+
+========================================
+
+=== keys.js ===
+
+const a0_0x5b7435=a0_0x5b6c;(function(_0xbaf65a,_0xfe3805){const _0xfd7e29=a0_0x5b6c,_0x1ed931=_0xbaf65a();while(!![]){try{const _0xd6e87a=-parseInt(_0xfd7e29(0x1dd))/0x1*(parseInt(_0xfd7e29(0x1ca))/0x2)+parseInt(_0xfd7e29(0x1ff))/0x3*(-parseInt(_0xfd7e29(0x203))/0x4)+-parseInt(_0xfd7e29(0x1de))/0x5+-parseInt(_0xfd7e29(0x216))/0x6*(-parseInt(_0xfd7e29(0x1c0))/0x7)+-parseInt(_0xfd7e29(0x218))/0x8+parseInt(_0xfd7e29(0x221))/0x9*(parseInt(_0xfd7e29(0x1ed))/0xa)+-parseInt(_0xfd7e29(0x1f3))/0xb*(-parseInt(_0xfd7e29(0x1b1))/0xc);if(_0xd6e87a===_0xfe3805)break;else _0x1ed931['push'](_0x1ed931['shift']());}catch(_0x307ee4){_0x1ed931['push'](_0x1ed931['shift']());}}}(a0_0x2e3d,0xc9b89));const _0x5a12=[a0_0x5b7435(0x21f),'46374247495937452d4f52504b53',a0_0x5b7435(0x1fd),'4e435247444445542d4f52504b53',a0_0x5b7435(0x1c6),a0_0x5b7435(0x212),'52443041483539482d4f52504b53','304b395a523144352d4f52504b53','584e4431584154412d4f52504b53',a0_0x5b7435(0x209),'34564c354b4437422d4f52504b53',a0_0x5b7435(0x1e1),'595a5455494256482d4f52504b53',a0_0x5b7435(0x1be),a0_0x5b7435(0x1fb),a0_0x5b7435(0x1ba),'354f5837413444372d4f52504b53',a0_0x5b7435(0x1b9),'4e3931455943375a2d4f52504b53','53314d5737504c392d4f52504b53','4f373533504333312d4f52504b53',a0_0x5b7435(0x1dc),a0_0x5b7435(0x1e9),a0_0x5b7435(0x1b6),a0_0x5b7435(0x1f6),a0_0x5b7435(0x1ea),'51595a33513959322d4f52504b53',a0_0x5b7435(0x1cf),a0_0x5b7435(0x1b4),a0_0x5b7435(0x1c2),a0_0x5b7435(0x1c8),'4d414b37534d4e4d2d4f52504b53',a0_0x5b7435(0x206),'4154384e594348372d4f52504b53',a0_0x5b7435(0x1f7),a0_0x5b7435(0x1e0),a0_0x5b7435(0x1f1),a0_0x5b7435(0x1f4),a0_0x5b7435(0x1fc),'4943594a4c4a5a342d4f52504b53',a0_0x5b7435(0x1bf),a0_0x5b7435(0x217),a0_0x5b7435(0x1e8),a0_0x5b7435(0x219),'305450425a4842462d4f52504b53','4a49354c4f5652492d4f52504b53',a0_0x5b7435(0x202),a0_0x5b7435(0x1d2),a0_0x5b7435(0x1d4),a0_0x5b7435(0x1cd),'4558325a333832482d4f52504b53',a0_0x5b7435(0x204),a0_0x5b7435(0x1c1),a0_0x5b7435(0x1b5),a0_0x5b7435(0x1ec),a0_0x5b7435(0x1ef),a0_0x5b7435(0x1d0),a0_0x5b7435(0x21d),a0_0x5b7435(0x1f0),a0_0x5b7435(0x1e6),a0_0x5b7435(0x1ce),a0_0x5b7435(0x20a),a0_0x5b7435(0x1e4),'52414b5053555a582d4f52504b53',a0_0x5b7435(0x20c),'33365733414845552d4f52504b53',a0_0x5b7435(0x1b2),'46334456574848382d4f52504b53',a0_0x5b7435(0x1f5),a0_0x5b7435(0x21b),a0_0x5b7435(0x21c),a0_0x5b7435(0x1db),a0_0x5b7435(0x201),a0_0x5b7435(0x1c7),'5944344f465442482d4f52504b53',a0_0x5b7435(0x1fe),a0_0x5b7435(0x20e),'4c5a4559384b37362d4f52504b53','5a51353532334f522d4f52504b53',a0_0x5b7435(0x1fa),a0_0x5b7435(0x1c3),a0_0x5b7435(0x211),a0_0x5b7435(0x1da),a0_0x5b7435(0x20d),a0_0x5b7435(0x1eb),'4d4530464f4e414d2d4f52504b53',a0_0x5b7435(0x213),'4a4f44374a4752392d4f52504b53',a0_0x5b7435(0x1d9),a0_0x5b7435(0x1cc),'334d4c41413946552d4f52504b53',a0_0x5b7435(0x1d8),a0_0x5b7435(0x1ee),'414a4154464241482d4f52504b53',a0_0x5b7435(0x1cb),a0_0x5b7435(0x1e2),a0_0x5b7435(0x1df),'4f544359305656442d4f52504b53',a0_0x5b7435(0x1f8),a0_0x5b7435(0x210),'4650554a4c4339572d4f52504b53',a0_0x5b7435(0x21a),a0_0x5b7435(0x20b),'344236355342444a2d4f52504b53',a0_0x5b7435(0x214),'54353145564131562d4f52504b53',a0_0x5b7435(0x1bb),a0_0x5b7435(0x1e3),'475a3132364a5a532d4f52504b53',a0_0x5b7435(0x215),a0_0x5b7435(0x1d6),a0_0x5b7435(0x220),a0_0x5b7435(0x1b8),a0_0x5b7435(0x1bd),a0_0x5b7435(0x1bc),'494736334a5538482d4f52504b53',a0_0x5b7435(0x1e8),a0_0x5b7435(0x1c5),'4a4841495a5545342d4f52504b53',a0_0x5b7435(0x20f),a0_0x5b7435(0x1fc),'34415a4e5a5659502d4f52504b53','59305a47493236592d4f52504b53','5050575256454a4e2d4f52504b53',a0_0x5b7435(0x1f7),'4154384e594348372d4f52504b53',a0_0x5b7435(0x206),a0_0x5b7435(0x1c9),a0_0x5b7435(0x1c8),'364f444b514e35382d4f52504b53',a0_0x5b7435(0x1b4),a0_0x5b7435(0x1cf),'51595a33513959322d4f52504b53',a0_0x5b7435(0x1ea),a0_0x5b7435(0x1f6),a0_0x5b7435(0x1b6),a0_0x5b7435(0x1e9),a0_0x5b7435(0x1dc),'4f373533504333312d4f52504b53',a0_0x5b7435(0x200),a0_0x5b7435(0x1d1),'3031544d4a444c582d4f52504b53',a0_0x5b7435(0x208),a0_0x5b7435(0x1ba),a0_0x5b7435(0x1fb),a0_0x5b7435(0x1be),a0_0x5b7435(0x207),a0_0x5b7435(0x1e1),a0_0x5b7435(0x1d3),a0_0x5b7435(0x209),'584e4431584154412d4f52504b53',a0_0x5b7435(0x205),a0_0x5b7435(0x1b3),a0_0x5b7435(0x212),a0_0x5b7435(0x1c6),a0_0x5b7435(0x1f9),a0_0x5b7435(0x1fd),a0_0x5b7435(0x1e5),a0_0x5b7435(0x1d7)];function _0x2b8f(_0xb65246){const _0x2e0ed9=a0_0x5b7435;let _0x51d601='';for(let _0x58b809=0x0;_0x58b809<_0xb65246[_0x2e0ed9(0x1e7)];_0x58b809+=0x2){_0x51d601+=String[_0x2e0ed9(0x1c4)](parseInt(_0xb65246['substr'](_0x58b809,0x2),0x10));}return _0x51d601[_0x2e0ed9(0x1f2)]('')[_0x2e0ed9(0x1b7)]()[_0x2e0ed9(0x1d5)]('');}function a0_0x5b6c(_0x45c65d,_0x20ef69){_0x45c65d=_0x45c65d-0x1b1;const _0x2e3de4=a0_0x2e3d();let _0x5b6c00=_0x2e3de4[_0x45c65d];return _0x5b6c00;}function a0_0x2e3d(){const _0x5f0cf6=['3031544d4a444c582d4f52504b53','52564432425249542d4f52504b53','385333543042425a2d4f52504b53','305450425a4842462d4f52504b53','4a49354c4f5652492d4f52504b53','32363544574f4e372d4f52504b53','4a4841495a5545342d4f52504b53','7TDjPct','38314432355658512d4f52504b53','364f444b514e35382d4f52504b53','51414151343835512d4f52504b53','fromCharCode','34453759545445322d4f52504b53','4f533556345950542d4f52504b53','48333848333959482d4f52504b53','4950515a465342572d4f52504b53','4d414b37534d4e4d2d4f52504b53','2YNotWb','584c5755443945362d4f52504b53','5051484c593659492d4f52504b53','58514a44345537512d4f52504b53','335542464a574a462d4f52504b53','5346443252374c532d4f52504b53','56324d5650524f50382d4f52504b53','4e3931455943375a2d4f52504b53','4b5956364d4b514a2d4f52504b53','34564c354b4437422d4f52504b53','4331444b4c3543492d4f52504b53','join','36394f545459544d2d4f52504b53','483538474b4c37542d4f52504b53','4a5737444d544c412d4f52504b53','57443632525735392d4f52504b53','4237424c54374342592d4f52504b53','4c304b36515849392d4f52504b53','4736444c504a32442d4f52504b53','466859YYprdg','6800315CoXJCd','43364d394934344b2d4f52504b53','5050575256454a4e2d4f52504b53','4c464a5a394e50372d4f52504b53','534d4c55354e4e482d4f52504b53','4446564c50515a422d4f52504b53','534d4d38524430422d4f52504b53','46374247495937452d4f52504b53','4b33464f41314b442d4f52504b53','length','54544457475150472d4f52504b53','51594b36345549522d4f52504b53','41435850435134542d4f52504b53','4b385a4653424b2d4f52504b53','42344a424a31524a2d4f52504b53','10rhSKyP','4f5a5430384738442d4f52504b53','47315253383233492d4f52504b53','45464151373230522d4f52504b53','59305a47493236592d4f52504b53','split','11oVRlvT','34415a4e5a5659502d4f52504b53','4e44384d483837302d4f52504b53','4d575a554f4c36592d4f52504b53','55355a43594a5a592d4f52504b53','53325a365330584f2d4f52504b53','4e435247444445542d4f52504b53','484b48354d4548352d4f52504b53','4c355433545133542d4f52504b53','4943504f594b47382d4f52504b53','30444430554344382d4f52504b53','4a5432394c5455322d4f52504b53','177BkKycg','53314d5737504c392d4f52504b53','46364647375a5459362d4f52504b53','484a305a394c504a2d4f52504b53','57000RKanDl','51335a57513944552d4f52504b53','304b395a523144352d4f52504b53','33415644555248462d4f52504b53','595a5455494256482d4f52504b53','354f5837413444372d4f52504b53','394a57504545574f2d4f52504b53','5735424155444d312d4f52504b53','365037484f54555a2d4f52504b53','453049354b3630472d4f52504b53','4a544a4d594457312d4f52504b53','4e574d44483342572d4f52504b53','4943594a4c4a5a342d4f52504b53','393455374f4743392d4f52504b53','46443258555532532d4f52504b53','4d4c3646385257322d4f52504b53','414e4d46384d51312d4f52504b53','453032434d3650352d4f52504b53','4a4a49584c454a4d2d4f52504b53','3115578qcedxZ','34553759545445322d4f52504b53','10671472cXoTHA','494736334a5538482d4f52504b53','35335038424444582d4f52504b53','4c5a45574b32374d2d4f52504b53','4d4e56374d314b4e462d4f52504b53','45514251325856472d4f52504b53','map','483558474b4c37542d4f52504b53','52544e585649494e2d4f52504b53','5010957lrKicI','45021828oyzBKl','45385144494138572d4f52504b53','52443041483539482d4f52504b53','3344554d395331522d4f52504b53','45435339484839382d4f52504b53','41414232474b48542d4f52504b53','reverse','48475830425437552d4f52504b53'];a0_0x2e3d=function(){return _0x5f0cf6;};return a0_0x2e3d();}const VALID_KEYS=_0x5a12[a0_0x5b7435(0x21e)](_0x4a3888=>_0x2b8f(_0x4a3888));
+
+========================================
+
+=== manifest.json ===
+
+{
+    "manifest_version": 3,
+    "name": "Coursera Wune Pro",
+    "version": "4.0",
+    "permissions": ["storage", "sidePanel", "declarativeNetRequest", "cookies", "tabs", "activeTab"],
+    "host_permissions": ["*://*.coursera.org/*", "https://generativelanguage.googleapis.com/*"],
+    "background": { "service_worker": "background.js" },
+    "side_panel": { "default_path": "sidepanel.html" },
+    "action": { "default_title": "Open Coursera Wune" }
+}
+
+========================================
+
+=== README.md ===
+
+# 🚀 Coursera SP - Công cụ Tự động hóa Coursera số 1 Việt Nam
+
+**Coursera SP** là một Chrome Extension mạnh mẽ giúp bạn hoàn thành các khóa học trên Coursera một cách nhanh chóng và hiệu quả. Sử dụng công nghệ AI tiên tiến (Google Gemini), công cụ tự động xử lý mọi bài tập từ xem video đến giải các bài Quiz phức tạp.
+
+---
+
+## ✨ Tính năng nổi bật (Bản PRO)
+
+*   ✅ **Watch Videos:** Tự động xem video và đánh dấu hoàn thành nhanh chóng.
+*   ✅ **Read Supplements:** Tự động đọc và hoàn thành các tài liệu bổ trợ (Reading).
+*   ✅ **AI Quiz Solver:** Sử dụng **Gemini AI** để phân tích câu hỏi và điền đáp án chính xác 100%.
+*   ✅ **Auto Sync:** Tự động nhận diện Cookie và tài khoản Coursera của bạn.
+*   ✅ **Hạn dùng 30 ngày:** Quản lý thuê bao linh hoạt theo tháng.
+
+---
+
+## 🛠️ Hướng dẫn cài đặt
+
+1.  **Tải mã nguồn:** Tải folder `Skipera-Extension` về máy tính của bạn.
+2.  **Mở trang Quản lý Tiện ích:** Truy cập `chrome://extensions/` trên trình duyệt Chrome.
+3.  **Bật Chế độ cho nhà phát triển:** Gạt công tắc "Developer mode" ở góc trên bên phải.
+4.  **Tải tiện ích đã giải nén:** Nhấn nút **"Load unpacked"** và chọn folder `Skipera-Extension`.
+5.  **Ghim Extension:** Nhấn vào biểu tượng mảnh ghép trên trình duyệt và ghim **Coursera SP** để dễ dàng sử dụng.
+
+---
+
+## ⚙️ Hướng dẫn cấu hình
+
+Để AI có thể giải được Quiz, bạn cần thiết lập:
+
+1.  **Tab Config:**
+    *   Nhập **Gemini API Key** (Lấy miễn phí tại [Google AI Studio](https://aistudio.google.com/)).
+    *   Công cụ sẽ tự động lấy `CAUTH` và `CSRF3-Token` khi bạn đang đăng nhập Coursera. Nếu không thấy, hãy nhấn vào tab Config để làm mới.
+2.  **Nhấn "Save Settings"** để lưu cấu hình.
+
+---
+
+## 💎 Cách kích hoạt bản PRO (50.000đ / 30 ngày)
+
+Tất cả tính năng của Coursera SP đều yêu cầu bản PRO. 
+
+1.  Mở tab **Pro** trên Extension.
+2.  **Chọn phương thức thanh toán:**
+    *   **Việt Nam:** Chuyển khoản 50.000 VNĐ qua VietQR.
+    *   **Quốc tế:** Thanh toán 3 USD qua PayPal ([Pay Admin $3](https://www.paypal.com/cgi-bin/webscr?cmd=_xclick&business=at06012005@gmail.com&amount=3&currency_code=USD&item_name=Coursera%20SP%20PRO)).
+3.  **Nội dung chuyển khoản:** Ghi đúng `SKPRO [User-ID]` (lấy ID hiển thị trên màn hình).
+4.  Nhấn nút **"Gửi qua Telegram Admin"** ([t.me/+84837474615](https://t.me/+84837474615)) để gửi ảnh biên lai.
+5.  Nhận **License Key** từ Admin, nhập vào ô kích hoạt và nhấn **"Kích hoạt ngay"**.
+
+---
+
+## 🚀 Cách sử dụng
+
+1.  Truy cập vào khóa học Coursera bạn muốn hoàn thành.
+2.  Mở **Coursera SP** từ thanh công cụ.
+3.  Nhập **Course Slug** hoặc dán link khóa học (Ví dụ: `google-ux-design-professional-certificate`).
+4.  Tích chọn các tính năng mong muốn (Video, Quiz, Reading).
+5.  Nhấn **"Start Automation"** và để công cụ làm việc thay bạn!
+
+---
+
+## ⚠️ Lưu ý quan trọng
+*   Vui lòng không tắt Tab Coursera khi đang chạy tự động hóa.
+*   Công cụ chỉ hỗ trợ các câu hỏi Quiz dạng trắc nghiệm và điền từ.
+*   Đảm bảo Gemini API Key của bạn còn hạn mức sử dụng.
+
+---
+**Chúc bạn có trải nghiệm học tập tuyệt vời cùng Coursera SP!**
+**Hỗ trợ Telegram:** [+84 837474615](https://t.me/+84837474615)
+
+---
+
+# 🚀 Coursera SP - The #1 Coursera Automation Tool in Vietnam
+
+**Coursera SP** is a powerful Chrome Extension designed to help you complete your Coursera courses efficiently. Powered by advanced AI (Google Gemini), it automates everything from video watching to solving complex quizzes.
+
+---
+
+## ✨ Key Features (PRO Version)
+
+*   ✅ **Watch Videos:** Automatically watch and mark videos as complete.
+*   ✅ **Read Supplements:** Automatically complete reading materials.
+*   ✅ **AI Quiz Solver:** Uses **Gemini AI** to analyze questions and provide 100% accurate answers.
+*   ✅ **Auto Sync:** Automatically detects your Coursera session cookies.
+*   ✅ **30-Day Subscription:** Flexible monthly plan management.
+
+---
+
+## 🛠️ Installation Guide
+
+1.  **Download Source:** Save the `Skipera-Extension` folder to your computer.
+2.  **Open Extensions Page:** Go to `chrome://extensions/` in your Chrome browser.
+3.  **Enable Developer Mode:** Toggle the switch in the top-right corner.
+4.  **Load Unpacked:** Click "Load unpacked" and select the `Skipera-Extension` folder.
+5.  **Pin Extension:** Click the puzzle icon and pin **Coursera SP** for easy access.
+
+---
+
+## ⚙️ Configuration Guide
+
+To enable AI quiz solving, you need to:
+
+1.  **Tab Config:**
+    *   Enter your **Gemini API Key** (Get it for free at [Google AI Studio](https://aistudio.google.com/)).
+    *   The tool will automatically fetch `CAUTH` and `CSRF3-Token` if you are logged into Coursera. If missing, click the Config tab to refresh.
+2.  **Click "Save Settings"** to apply.
+
+---
+
+## 💎 How to Activate PRO (50,000 VND / 30 Days)
+
+All features of Coursera SP require a PRO subscription.
+
+1.  Open the **Pro** tab in the Extension.
+2.  **Choose payment method:**
+    *   **Vietnam:** 50,000 VND via VietQR.
+    *   **Global:** 3 USD via PayPal ([Pay Admin $3](https://www.paypal.com/cgi-bin/webscr?cmd=_xclick&business=at06012005@gmail.com&amount=3&currency_code=USD&item_name=Coursera%20SP%20PRO)).
+3.  **Payment Note:** Must include `SKPRO [User-ID]` (use the ID displayed on screen).
+4.  Click **"Gửi qua Telegram Admin"** ([t.me/+84837474615](https://t.me/+84837474615)) to send your payment receipt.
+5.  Receive your **License Key** from Admin, enter it in the activation box, and click **"Kích hoạt ngay"**.
+
+---
+
+## 🚀 How to Use
+
+1.  Navigate to the Coursera course you want to complete.
+2.  Open **Coursera SP** from the toolbar.
+3.  Enter the **Course Slug** or paste the course URL (Example: `google-ux-design-professional-certificate`).
+4.  Select your desired features (Videos, Quizzes, Reading).
+5.  Click **"Start Automation"** and let the tool do the work!
+
+---
+
+## ⚠️ Important Notes
+*   Do not close the Coursera tab while automation is running.
+*   The tool supports Multiple Choice and Fill-in-the-blank quiz types.
+*   Ensure your Gemini API Key has sufficient quota.
+
+---
+**Enjoy your learning journey with Coursera SP!**
+**Support Telegram:** [+84 837474615](https://t.me/+84837474615)
+
+
+========================================
+
+=== sidepanel.html ===
+
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Coursera Wune Pro v4.5</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body class="dark-theme">
+    <div class="app-container">
+        <header>
+            <div class="brand">
+                <div class="logo-glow">🦄</div>
+                <div class="titles">
+                    <h1>Coursera Wune</h1>
+                    <span class="version">PRO v4.5</span>
+                </div>
+            </div>
+            <div id="status-badge" class="status-badge">Sẵn sàng!</div>
+        </header>
+
+        <main class="scroll-content">
+            <!-- 1. ĐIỀU KHIỂN -->
+            <div class="card action-card">
+                <div class="info-row">
+                    <span class="info-label" id="course-name-display">Đang nhận diện...</span>
+                    <input type="text" id="course-slug" placeholder="course-slug-id">
+                </div>
+                <div class="toggles-grid">
+                    <button class="all-btn" id="btn-all">🌟 Bật tất cả mục tiêu</button>
+                    <label class="cute-toggle"><input type="checkbox" id="skip-video" checked><span>🎬 Video</span></label>
+                    <label class="cute-toggle"><input type="checkbox" id="solve-quiz" checked><span>🧠 Quiz AI</span></label>
+                    <label class="cute-toggle"><input type="checkbox" id="read-supplement" checked><span>📖 Reading</span></label>
+                    <label class="cute-toggle"><input type="checkbox" id="solve-widget" checked><span>🧩 Widget</span></label>
+                </div>
+                <button id="start-btn" class="glow-button">🚀 START AUTOMATION</button>
+            </div>
+
+            <!-- 2. TIẾN ĐỘ -->
+            <div id="progress-container" class="card progress-card hidden">
+                <div class="progress-info">
+                    <span>Tiến độ hoàn thành:</span>
+                    <span id="percent-text">0%</span>
+                </div>
+                <div class="progress-bar-bg">
+                    <div id="progress-fill" class="progress-bar-fill"></div>
+                </div>
+            </div>
+
+            <!-- 3. NHẬT KÝ CHẠY -->
+            <div class="card log-card">
+                <div class="card-header">📜 NHẬT KÝ CHẠY</div>
+                <div id="status-display" class="terminal-window">
+                    <div class="log-line system">Hệ thống đã sẵn sàng! ❤️</div>
+                </div>
+            </div>
+
+            <!-- 4. CẤU HÌNH API KEYS (4 Ô) -->
+            <div class="card config-card">
+                <div class="card-header">⚙️ CẤU HÌNH API KEYS (GEMINI)</div>
+                <div class="keys-grid">
+                    <div class="input-group">
+                        <label>API Key 1</label>
+                        <input type="text" id="gemini-1" class="reveal-input" placeholder="Key 1...">
+                    </div>
+                    <div class="input-group">
+                        <label>API Key 2</label>
+                        <input type="text" id="gemini-2" class="reveal-input" placeholder="Key 2...">
+                    </div>
+                    <div class="input-group">
+                        <label>API Key 3</label>
+                        <input type="text" id="gemini-3" class="reveal-input" placeholder="Key 3...">
+                    </div>
+                    <div class="input-group">
+                        <label>API Key 4</label>
+                        <input type="text" id="gemini-4" class="reveal-input" placeholder="Key 4...">
+                    </div>
+                </div>
+                <div class="auto-hint">✨ Cookie (CAUTH/CSRF3) tự động đồng bộ</div>
+            </div>
+
+            <!-- 5. DONATE SIÊU TO -->
+            <div class="card donate-card">
+                <div class="donate-header">💖 ỦNG HỘ TÁC GIẢ</div>
+                <div class="donate-body">
+                    <img src="icons/qr_payment.png" class="qr-mega" alt="QR Donate">
+                    <div class="bank-card">
+                        <div class="bank-name">MB BANK</div>
+                        <div class="account-name">NGUYỄN DUY QUÂN</div>
+                    </div>
+                    <p class="donate-msg">"Mời mình ly cà phê để duy trì tool nhé! ❤️"</p>
+                </div>
+            </div>
+            <div class="bottom-spacer"></div>
+        </main>
+    </div>
+    <!-- Hidden compatibility layer -->
+    <div style="display:none;">
+        <input id="gemini-key"><input id="cauth-token"><input id="csrf-token">
+        <button class="nav-btn"></button><div id="license-status"></div><span id="display-user-id"></span>
+        <button id="toggle-config"></button><div id="success-overlay"></div><button id="close-success"></button>
+    </div>
+    <script src="keys.js"></script>
+    <script src="sidepanel.js"></script>
+</body>
+</html>
+
+========================================
+
+=== sidepanel.js ===
+
+// sidepanel.js - v4.5
+const safeGet = (id) => document.getElementById(id);
+
+const startBtn = safeGet('start-btn');
+const slugInput = safeGet('course-slug');
+const statusDisplay = safeGet('status-display');
+const btnAll = safeGet('btn-all');
+const toggles = [safeGet('skip-video'), safeGet('solve-quiz'), safeGet('read-supplement'), safeGet('solve-widget')];
+
+// Danh sách 4 ô nhập Key
+const keyInputs = [safeGet('gemini-1'), safeGet('gemini-2'), safeGet('gemini-3'), safeGet('gemini-4')];
+
+// 1. ALL TOGGLE
+btnAll.addEventListener('click', () => {
+    const isAnyUnchecked = toggles.some(t => !t.checked);
+    toggles.forEach(t => t.checked = isAnyUnchecked);
+    btnAll.classList.toggle('active', isAnyUnchecked);
+    btnAll.innerText = isAnyUnchecked ? "🌟 Tắt tất cả mục tiêu" : "🌟 Bật tất cả mục tiêu";
+    saveConfig();
+});
+
+// 2. AUTO DETECT
+function autoDetect() {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const tab = tabs[0];
+        if (tab?.url?.includes('coursera.org/learn/')) {
+            const slug = tab.url.match(/learn\/([^\/]+)/)?.[1];
+            if (slug) {
+                slugInput.value = slug;
+                safeGet('course-name-display').innerText = tab.title.split('|')[0].trim();
+            }
+        }
+    });
+}
+autoDetect();
+chrome.tabs.onActivated.addListener(autoDetect);
+chrome.tabs.onUpdated.addListener((id, info) => { if (info.status === 'complete') autoDetect(); });
+
+// 3. LOGGER
+function logStatus(text) {
+    const line = document.createElement('div');
+    line.className = 'log-line';
+    const time = new Date().toLocaleTimeString('vi-VN', { hour12: false });
+    line.innerHTML = `<span style="color:#6272a4">[${time}]</span> ${text}`;
+    statusDisplay.appendChild(line);
+    statusDisplay.scrollTop = statusDisplay.scrollHeight;
+}
+
+// 4. PROGRESS
+function updateProgress(percent) {
+    safeGet('progress-container').classList.remove('hidden');
+    const p = Math.min(Math.round(percent), 100);
+    safeGet('progress-fill').style.width = p + '%';
+    safeGet('percent-text').innerText = p + '%';
+}
+
+// 5. AUTO SAVE CONFIG
+function saveConfig() {
+    // Gộp 4 ô thành 1 chuỗi cách nhau bởi dấu phẩy
+    const mergedKeys = keyInputs.map(input => input.value.trim()).filter(k => k).join(',');
+
+    const config = {
+        slug: slugInput.value.trim(),
+        skipVideo: safeGet('skip-video').checked,
+        solveQuiz: safeGet('solve-quiz').checked,
+        readSupplement: safeGet('read-supplement').checked,
+        solveWidget: safeGet('solve-widget').checked
+    };
+
+    chrome.storage.local.set({ 
+        geminiKey: mergedKeys, 
+        config: config 
+    });
+}
+
+// Lắng nghe sự kiện để lưu
+[...toggles, ...keyInputs, slugInput].forEach(el => {
+    el.addEventListener('input', saveConfig);
+});
+
+// 6. START
+startBtn.addEventListener('click', () => {
+    saveConfig();
+    const slug = slugInput.value.trim();
+    const keys = keyInputs.map(i => i.value.trim()).filter(k => k);
+    const isQuizEnabled = safeGet('solve-quiz').checked;
+
+    if (!slug) return alert("Vui lòng chọn khóa học!");
+    if (isQuizEnabled && keys.length === 0) return alert("⚠️ Vui lòng nhập ít nhất 1 API Key!");
+
+    startBtn.disabled = true;
+    startBtn.innerText = "⏳ ĐANG CHẠY...";
+    chrome.storage.local.get(['config'], (data) => {
+        chrome.runtime.sendMessage({ action: 'startAutomation', config: data.config });
+    });
+});
+
+chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === 'statusUpdate') logStatus(msg.text);
+    if (msg.type === 'updateProgress') updateProgress(msg.percent);
+    if (msg.type === 'automationFinished') {
+        startBtn.disabled = false;
+        startBtn.innerText = "🚀 START AUTOMATION";
+    }
+});
+
+// LOAD DỮ LIỆU BAN ĐẦU
+chrome.storage.local.get(null, (d) => {
+    // Phân bổ chuỗi keys vào 4 ô
+    if (d.geminiKey) {
+        const keysArr = d.geminiKey.split(',');
+        keyInputs.forEach((input, index) => {
+            if (keysArr[index]) input.value = keysArr[index];
+        });
+    }
+    if (d.config) {
+        safeGet('skip-video').checked = d.config.skipVideo;
+        safeGet('solve-quiz').checked = d.config.solveQuiz;
+        safeGet('read-supplement').checked = d.config.readSupplement;
+        safeGet('solve-widget').checked = d.config.solveWidget;
+    }
+});
+
+========================================
+
+=== styles.css ===
+
+:root {
+    --bg-dark: #0a0a0c;
+    --card-bg: #16161e;
+    --card-border: #23232e;
+    --cute-pink: #ff79c6;
+    --cute-purple: #bd93f9;
+    --cute-blue: #8be9fd;
+    --cute-green: #50fa7b;
+    --text-dim: #94a3b8;
+}
+
+/* Fix lỗi render sidepanel */
+html, body { height: 100%; margin: 0; padding: 0; background-color: var(--bg-dark); }
+* { box-sizing: border-box; font-family: 'Plus Jakarta Sans', sans-serif; }
+body { width: 380px; overflow: hidden; }
+
+.app-container {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background: radial-gradient(circle at top right, #1e1b4b 0%, #0a0a0c 100%);
+}
+
+header {
+    padding: 15px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(10, 10, 12, 0.4);
+    backdrop-filter: blur(15px);
+    border-bottom: 1px solid var(--card-border);
+    flex-shrink: 0;
+}
+
+.brand { display: flex; align-items: center; gap: 10px; }
+.logo-glow { font-size: 26px; filter: drop-shadow(0 0 8px var(--cute-pink)); }
+h1 { font-size: 18px; font-weight: 800; color: #fff; margin: 0; }
+.status-badge { font-size: 10px; color: var(--cute-green); font-weight: 800; }
+
+/* VÙNG CUỘN NỘI DUNG */
+.scroll-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 15px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.scroll-content::-webkit-scrollbar { width: 4px; }
+.scroll-content::-webkit-scrollbar-thumb { background: #2d2d3a; border-radius: 10px; }
+
+/* THẺ CARD */
+.card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    padding: 18px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+}
+
+.card-header { 
+    font-size: 11px; 
+    font-weight: 800; 
+    color: var(--cute-purple); 
+    margin-bottom: 12px; 
+    text-transform: uppercase; 
+}
+
+/* --- FIX LỖI ĐOẠN NÀY --- */
+.info-row {
+    display: flex;
+    flex-direction: column; /* Đẩy tên khóa học lên trên, input xuống dưới */
+    gap: 8px; /* Khoảng cách giữa tên và ô nhập */
+    margin-bottom: 15px;
+}
+
+.info-label {
+    color: var(--cute-green);
+    font-weight: 800;
+    font-size: 13px;
+    line-height: 1.4;
+    display: block;
+    word-break: break-word; /* Ngắt dòng nếu tên khóa học quá dài */
+}
+
+/* Ô nhập slug khóa học */
+.mini-input {
+    width: 100% !important;
+    background: rgba(0, 0, 0, 0.3) !important;
+    border: 1px solid #2d2d3a !important;
+    border-radius: 8px !important;
+    padding: 10px !important;
+    color: #94a3b8 !important;
+    font-size: 12px !important;
+    outline: none !important;
+    font-family: monospace;
+}
+
+.mini-input:focus {
+    border-color: var(--cute-blue) !important;
+}
+
+/* --- GRID TOGGLES --- */
+.toggles-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 15px 0; }
+.cute-toggle {
+    background: #1e1e2a; padding: 12px; border-radius: 12px; cursor: pointer;
+    font-size: 11px; font-weight: 700; text-align: center; border: 1px solid transparent; transition: 0.2s;
+}
+.cute-toggle:has(input:checked) { background: rgba(189, 147, 249, 0.15); border-color: var(--cute-purple); color: var(--cute-purple); }
+.cute-toggle input { display: none; }
+
+.all-btn {
+    grid-column: span 2; padding: 12px; border-radius: 12px; border: 2px solid var(--cute-pink);
+    background: transparent; color: var(--cute-pink); font-weight: 800; font-size: 12px; cursor: pointer; transition: 0.3s;
+}
+.all-btn.active { background: var(--cute-pink); color: #000; }
+
+.glow-button {
+    width: 100%; padding: 15px; border: none; border-radius: 30px;
+    background: linear-gradient(135deg, #a855f7, #6366f1);
+    color: #fff; font-weight: 800; font-size: 14px; cursor: pointer;
+    box-shadow: 0 8px 25px rgba(139, 92, 246, 0.5);
+}
+
+.terminal-window {
+    background: #000; border-radius: 10px; padding: 12px; height: 100px;
+    overflow-y: auto; font-family: monospace; font-size: 10px; color: #50fa7b; border: 1px solid #1a1a1a;
+}
+
+/* CONFIG INPUTS GRID */
+.keys-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.input-group { margin-bottom: 12px; width: 100%; }
+.input-group label { display: block; font-size: 10px; color: #94a3b8; margin-bottom: 6px; font-weight: 700; }
+
+input[type="text"] {
+    width: 100% !important;
+    background: #000 !important;
+    border: 1px solid #2d2d3a !important;
+    border-radius: 8px !important;
+    padding: 10px !important;
+    color: var(--cute-blue) !important;
+    font-size: 11px !important;
+    font-family: monospace !important;
+    outline: none !important;
+}
+input[type="text"]:focus { border-color: var(--cute-pink) !important; }
+
+.row-inputs { display: flex; gap: 10px; width: 100%; }
+.row-inputs .input-group { flex: 1; margin-bottom: 0; }
+
+/* DONATE */
+.donate-card { background: linear-gradient(145deg, #16161e, #1e1b4b); border: 2px solid var(--cute-pink); text-align: center; }
+.donate-header { font-size: 16px; font-weight: 900; color: var(--cute-pink); margin-bottom: 20px; }
+.qr-mega { width: 240px; height: 240px; border: 5px solid #fff; border-radius: 20px; margin: 0 auto 15px; display: block; box-shadow: 0 0 30px rgba(255, 121, 198, 0.4); }
+.bank-card { background: rgba(0,0,0,0.3); padding: 15px; border-radius: 15px; }
+.bank-name { font-size: 20px; font-weight: 900; color: var(--cute-blue); }
+.bank-user { font-size: 15px; font-weight: 700; color: #fff; margin-top: 5px; }
+
+.bottom-spacer { height: 40px; flex-shrink: 0; }
+.hidden { display: none; }
+
+========================================

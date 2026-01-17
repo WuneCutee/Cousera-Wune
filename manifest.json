@@ -1,0 +1,10 @@
+{
+    "manifest_version": 3,
+    "name": "Coursera Wune Pro",
+    "version": "4.0",
+    "permissions": ["storage", "sidePanel", "declarativeNetRequest", "cookies", "tabs", "activeTab"],
+    "host_permissions": ["*://*.coursera.org/*", "https://generativelanguage.googleapis.com/*"],
+    "background": { "service_worker": "background.js" },
+    "side_panel": { "default_path": "sidepanel.html" },
+    "action": { "default_title": "Open Coursera Wune" }
+}
