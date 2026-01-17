@@ -56,7 +56,7 @@ Do tool này không có trên Chrome Web Store, bạn cần cài đặt thủ c�
 - Gạt công tắc **Developer mode** ở góc phải trên cùng.
 - Kiểm tra extension Wune đã xuất hiện trong danh sách.
 
-> ![Ảnh minh họa bước 1](![Uploading image.png…]()
+> ![Ảnh minh họa bước 1](Cousera-Wune/blob/main/icons/1.png)
 )
 
 ---
