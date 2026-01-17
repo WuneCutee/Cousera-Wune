@@ -61,29 +61,25 @@ Do tool này không có trên Chrome Web Store, bạn cần cài đặt thủ c�
 
 ---
 
-### 2. Mở Wune ở Side Panel
-- Click icon **Extension** (hình mảnh ghép) trên thanh công cụ.
-- Chọn **Open Side Panel** để mở bảng bên phải.
-- Nếu đã pin Wune, có thể click trực tiếp icon Wune.
+### 2. chuẩn bị thêm tiện ích vào trình duyệt
+- Click vào **tiện ích đã giải nén** và vào đường dẫn của Cousera Wune.
 
-> ![Ảnh minh họa bước 2](path/to/image2.png)
+> ![Ảnh minh họa bước 2](icons/2.png)
 
 ---
 
-### 3. Giao diện Wune hiển thị bên phải
-- Bảng bên phải xuất hiện với giao diện Wune.
-- Kiểm tra các tab như Video, Quiz, Reading… và ô nhập API Key.
+### 3. thêm Extension vào trình duyệt
+- Chọn **Select Folder** để thêm tiện ích vào trình duyệt.
 
-> ![Ảnh minh họa bước 3](path/to/image3.png)
+> ![Ảnh minh họa bước 3](icons/3.png)    
 
 ---
 
-### 4. Dán API Key vào ô "Enter your API keys"
-- Sao chép API Key của bạn từ nguồn cung cấp.
-- Dán vào ô nhập **Enter your API keys**.
-- Nhấn **Save/Apply** nếu giao diện yêu cầu.
-
-> ![Ảnh minh họa bước 4](path/to/image4.png)
+### 4. sử dụng
+- Vào khóa học bạn muốn rush
+- ấn vào icon Extensions của trình duyệt
+- chọn 
+> ![Ảnh minh họa bước 4](icons/4.png)
 
 ---
 
@@ -91,24 +87,16 @@ Do tool này không có trên Chrome Web Store, bạn cần cài đặt thủ c�
 - **Video:** Tự động xem/điền theo yêu cầu.
 - **Quiz:** Hỗ trợ làm bài trắc nghiệm.
 - **Reading:** Tự động đọc/đánh dấu hoàn thành.
-- Có thể thiết lập thêm tùy chọn nâng cao nếu có.
+- Có thể thiết lập thêm tùy chọn nâng cao nếu bạn muốn, còn không thì cứ ấn bắt đầu và đợi là được.
 
-> ![Ảnh minh họa bước 5](path/to/image5.png)
+> ![Ảnh minh họa bước 5](icons/5.png)
 
 ---
-
-### 6. Bắt đầu tự động hóa
-- Nhấn nút **⚡ START AUTOMATION**.
-- Theo dõi trạng thái chạy trong panel.
-- Dừng hoặc tạm dừng bằng nút **Stop/Pause** nếu cần.
-
-> ![Ảnh minh họa bước 6](path/to/image6.png)
 
 ---
 
 ## 💡 Mẹo & Xử Lý Sự Cố
 - **Không mở được Side Panel:** Kiểm tra Chrome đã cập nhật, bật/tắt lại Developer mode.
-- **API Key không nhận:** Kiểm tra không có khoảng trắng thừa, đảm bảo key còn hiệu lực.
 - **Nhiệm vụ không chạy:** Đ
 
 ---
