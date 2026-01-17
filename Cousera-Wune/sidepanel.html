@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Coursera Wune - Professional Edition</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+</head>
+<body class="dark-theme">
+    <div class="app-container">
+        <header class="main-header">
+            <div class="brand">
+                <div class="logo-wrap-clean">
+                    <img src="icons/logo.png" alt="Wune Logo" class="app-logo-img">
+                </div>
+                <div class="header-text">
+                    <h1>COURSERA AUTOMATION</h1>
+                    <span class="version-tag">PROFESSIONAL v6.4</span>
+                </div>
+            </div>
+            <div id="status-badge" class="status-badge">SYSTEM<br>READY</div>
+        </header>
+
+        <main class="scroll-content">
+            <div class="card control-card">
+                <div class="info-row">
+                    <span id="course-name-display" class="course-name">// Course: Awaiting Selection</span>
+                    <input type="text" id="course-slug" placeholder="Enter course slug (e.g., machine-learning)" class="hacker-input">
+                </div>
+                
+                <div class="toggles-row">
+                    <button class="all-btn" id="btn-all">🛡️ DISABLE ALL</button>
+                    
+                    <div class="toggles-grid-clean">
+                        <button class="task-btn" id="skip-video" data-checked="true"><span>Video Skip</span></button>
+                        <button class="task-btn" id="solve-quiz" data-checked="true"><span>Auto Quiz</span></button>
+                        <button class="task-btn" id="read-supplement" data-checked="true"><span>Reading Pass</span></button>
+                        <button class="task-btn" id="solve-widget" data-checked="true"><span>Widget Complete</span></button>
+                    </div>
+                </div>
+                
+                <button id="start-btn" class="main-action-button">⚡ START AUTOMATION</button>
+            </div>
+
+            <div id="progress-container" class="card progress-card">
+                <div class="progress-info">
+                    <span class="progress-label">PROCESSING TASKS</span>
+                    <span id="percent-text" class="progress-value">0%</span>
+                </div>
+                <div class="capy-road">
+                    <div id="progress-fill" class="progress-fill-animated" style="width: 0%;">
+                        <div class="capy-rider"><img id="capy-img-rolling" src="icons/bara.png" class="capy-img-rolling"></div>
+                    </div>
+                </div>
+                <div class="hacker-message">System Status: Awaiting task execution...</div>
+            </div>
+            <div class="card config-card">
+                <div class="card-header">⚙️ AI ENGINE CONFIGURATION</div>
+                <div class="keys-container">
+                    <input type="text" id="user-keys-merged" placeholder="Enter your API keys (comma separated)" class="hacker-input">
+                    
+                    <div id="key-status" class="key-status-bar">
+                        <span class="status-dot-key"></span> Connecting to AI service...
+                    </div>
+                </div>
+            </div>
+            
+            <div class="card donate-card premium-visual-card">
+                <div class="card-header">💖 SUPPORT DEVELOPMENT</div>
+                <div class="premium-layout-clean">
+                    <div class="qr-box-premium">
+                        <img src="icons/qr_payment.png" alt="QR Payment" class="qr-img-large">
+                        <div class="qr-scanline"></div>
+                    </div>
+                    <div class="bank-details-premium">
+                        <p class="bank-name-elite">MB BANK</p>
+                        <p class="account-name-elite">NGUYỄN DUY QUÂN</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card log-card">
+                <div class="card-header">📜 SYSTEM ACTIVITY LOG</div>
+                <div id="status-display" class="terminal-window">
+                    <div class="log-line-system">&gt; System initialized. Ready for operation.</div>
+                </div>
+            </div>
+            
+            <div class="bottom-spacer"></div>
+        </main>
+    </div>
+    <script src="sidepanel.js"></script>
+</body>
+</html>
